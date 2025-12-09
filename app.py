@@ -1,43 +1,143 @@
 import os
-from flask import Flask
+import requests
+import psycopg2
+from flask import Flask, jsonify
 
-# Cria a aplicação principal
+# --- Configuração Inicial ---
 app = Flask(__name__)
 
-# Obtém o token da API do Tiny a partir das variáveis de ambiente (o jeito seguro)
-# Ainda não configuramos isso no Render, então por enquanto ele será None
+# Carrega as chaves secretas das variáveis de ambiente do Render
 TINY_API_TOKEN = os.getenv("TINY_API_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+TINY_API_URL = "https://api.tiny.com.br/api2/produtos.pesquisa.php"
 
-# Endpoint de teste para verificar se o robô está "vivo"
+# --- Funções do Banco de Dados ---
+
+def get_db_connection():
+    """Cria e retorna uma nova conexão com o banco de dados."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        return conn
+    except psycopg2.OperationalError as e:
+        print(f"Erro ao conectar ao banco de dados: {e}")
+        return None
+
+def insert_product_in_db(cursor, produto):
+    """
+    Insere ou atualiza um produto no banco de dados.
+    Usa a cláusula ON CONFLICT para evitar duplicados e apenas atualizar.
+    """
+    # SQL para inserir um novo produto ou atualizar um existente se o id_tiny já estiver lá
+    sql = """
+        INSERT INTO produtos (
+            id_tiny, nome, sku, preco, preco_custo, unidade, ativo, 
+            data_criacao_tiny, data_atualizacao_tiny, ultima_sincronizacao
+        ) VALUES (
+            %(id)s, %(nome)s, %(sku)s, %(preco)s, %(preco_custo)s, %(unidade)s, %(situacao)s,
+            %(data_criacao)s, %(data_atualizacao)s, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (id_tiny) DO UPDATE SET
+            nome = EXCLUDED.nome,
+            sku = EXCLUDED.sku,
+            preco = EXCLUDED.preco,
+            preco_custo = EXCLUDED.preco_custo,
+            unidade = EXCLUDED.unidade,
+            ativo = EXCLUDED.ativo,
+            data_atualizacao_tiny = EXCLUDED.data_atualizacao_tiny,
+            ultima_sincronizacao = CURRENT_TIMESTAMP;
+    """
+    # A API do Tiny retorna 'A' para ativo. Convertemos para um booleano.
+    situacao_boolean = True if produto.get('situacao') == 'A' else False
+    
+    # O preço pode vir com vírgula, trocamos por ponto para o banco de dados.
+    preco_formatado = float(produto.get('preco', '0').replace(',', '.'))
+    preco_custo_formatado = float(produto.get('preco_custo', '0').replace(',', '.'))
+
+    # Monta o dicionário de dados para o SQL
+    dados_produto = {
+        'id': int(produto['id']),
+        'nome': produto['nome'],
+        'sku': produto.get('codigo', None), # 'codigo' é o SKU na API do Tiny
+        'preco': preco_formatado,
+        'preco_custo': preco_custo_formatado,
+        'unidade': produto.get('unidade', None),
+        'situacao': situacao_boolean,
+        'data_criacao': produto.get('data_criacao', None),
+        'data_atualizacao': produto.get('data_atualizacao', None)
+    }
+    
+    cursor.execute(sql, dados_produto)
+
+
+# --- Rotas da Aplicação (Endpoints) ---
+
 @app.route("/")
 def hello_world():
-    """
-    Página inicial que mostra se o serviço está no ar e se o token foi carregado.
-    """
-    if TINY_API_TOKEN:
-        status = "Token da API do Tiny foi encontrado!"
-    else:
-        status = "Token da API do Tiny AINDA NÃO foi configurado."
-        
-    return f"<h1>Robô Sincronizador Tiny</h1><p>Status: Online.</p><p>{status}</p>"
+    """Página inicial para verificar o status do serviço."""
+    status_token = "encontrado" if TINY_API_TOKEN else "NÃO configurado"
+    status_db = "encontrada" if DATABASE_URL else "NÃO configurada"
+    return (f"<h1>Robô Sincronizador Tiny</h1>"
+            f"<p>Status: Online.</p>"
+            f"<p>Token da API: {status_token}.</p>"
+            f"<p>URL do Banco de Dados: {status_db}.</p>"
+            f"<p>Para iniciar, acesse a rota /sincronizar</p>")
 
-# Função principal para buscar os produtos (ainda vazia)
+@app.route("/sincronizar")
 def sincronizar_produtos():
-    print("Iniciando a sincronização de produtos...")
-    
-    if not TINY_API_TOKEN:
-        print("ERRO: Token da API não configurado. Impossível sincronizar.")
-        return
+    """
+    Endpoint principal que dispara a sincronização.
+    Busca produtos na API do Tiny e os salva no banco de dados.
+    """
+    print("-> Iniciando processo de sincronização de produtos...")
 
-    # --- Lógica para buscar produtos na API do Tiny virá aqui ---
-    print("Lógica de sincronização ainda não implementada.")
-    
-    # --- Lógica para salvar no banco de dados virá aqui ---
-    print("Sincronização de produtos concluída.")
+    if not TINY_API_TOKEN or not DATABASE_URL:
+        return jsonify({"status": "erro", "mensagem": "Variáveis de ambiente não configuradas."}), 500
 
+    # 1. Buscar dados da API do Tiny
+    params = {
+        'token': TINY_API_TOKEN,
+        'formato': 'json',
+        'pagina': 1 # Por enquanto, buscamos apenas a primeira página
+    }
+    try:
+        response = requests.get(TINY_API_URL, params=params)
+        response.raise_for_status() # Lança um erro se a resposta for 4xx ou 5xx
+        data = response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Erro ao chamar a API do Tiny: {e}")
+        return jsonify({"status": "erro", "mensagem": f"Falha na comunicação com a API do Tiny: {e}"}), 500
+
+    if data['retorno']['status'] == 'ERRO':
+        erro_tiny = data['retorno']['erros'][0]['erro']
+        print(f"Erro retornado pela API do Tiny: {erro_tiny}")
+        return jsonify({"status": "erro", "mensagem": f"API do Tiny retornou um erro: {erro_tiny}"}), 400
+
+    produtos = data['retorno']['produtos']
+    print(f"Encontrados {len(produtos)} produtos na página 1.")
+
+    # 2. Salvar dados no Banco de Dados
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"status": "erro", "mensagem": "Não foi possível conectar ao banco de dados."}), 500
+    
+    try:
+        with conn.cursor() as cursor:
+            for item in produtos:
+                produto = item['produto']
+                insert_product_in_db(cursor, produto)
+            conn.commit() # Efetiva todas as inserções/atualizações no banco
+            print(f"-> Sucesso! {len(produtos)} produtos foram sincronizados com o banco de dados.")
+    except Exception as e:
+        conn.rollback() # Desfaz as alterações em caso de erro
+        print(f"Erro ao salvar no banco de dados: {e}")
+        return jsonify({"status": "erro", "mensagem": f"Ocorreu um erro no banco de dados: {e}"}), 500
+    finally:
+        conn.close() # Sempre fecha a conexão
+
+    return jsonify({"status": "sucesso", "produtos_sincronizados": len(produtos)})
 
 # Este bloco permite que o Render inicie a aplicação.
 if __name__ == "__main__":
     # Apenas para teste local, o Render usa o Gunicorn para iniciar.
     app.run()
-
+    
