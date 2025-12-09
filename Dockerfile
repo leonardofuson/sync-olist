@@ -18,4 +18,4 @@ EXPOSE 10000
 
 # Comando para iniciar a aplicação quando o container rodar
 # O Render vai sobrescrever isso com nosso Start Command, mas é uma boa prática ter
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "300", "app:app"]
