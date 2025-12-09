@@ -1,0 +1,5 @@
+# Ferramentas para o nosso robô
+requests==2.31.0    # Para fazer as chamadas à API do Tiny (o "garçom")
+psycopg2-binary==2.9.9 # Para conversar com o banco de dados PostgreSQL
+gunicorn==22.0.0    # Servidor web para rodar nosso app no Render
+Flask==3.0.3        # Uma micro-biblioteca para criar um ponto de partida para o nosso robô
