@@ -25,21 +25,20 @@ def get_db_connection():
         return None
 
 def insert_product_in_db(cursor, produto):
-    """
-    Insere ou atualiza um produto no banco de dados.
-    Usa a cláusula ON CONFLICT para evitar duplicados e apenas atualizar.
-    """
+    """Insere ou atualiza um produto no banco de dados (agora com GTIN)."""
+    # Adicionamos 'gtin' nas listas de colunas
     sql = """
         INSERT INTO produtos (
-            id_tiny, nome, sku, preco, preco_custo, unidade, ativo, 
+            id_tiny, nome, sku, gtin, preco, preco_custo, unidade, ativo, 
             data_criacao_tiny, data_atualizacao_tiny, ultima_sincronizacao
         ) VALUES (
-            %(id)s, %(nome)s, %(sku)s, %(preco)s, %(preco_custo)s, %(unidade)s, %(situacao)s,
+            %(id)s, %(nome)s, %(sku)s, %(gtin)s, %(preco)s, %(preco_custo)s, %(unidade)s, %(situacao)s,
             %(data_criacao)s, %(data_atualizacao)s, CURRENT_TIMESTAMP
         )
         ON CONFLICT (id_tiny) DO UPDATE SET
             nome = EXCLUDED.nome,
             sku = EXCLUDED.sku,
+            gtin = EXCLUDED.gtin, -- Adicionado no UPDATE
             preco = EXCLUDED.preco,
             preco_custo = EXCLUDED.preco_custo,
             unidade = EXCLUDED.unidade,
@@ -48,34 +47,25 @@ def insert_product_in_db(cursor, produto):
             ultima_sincronizacao = CURRENT_TIMESTAMP;
     """
     situacao_boolean = True if produto.get('situacao') == 'A' else False
-    
     preco_str = str(produto.get('preco', '0'))
     preco_custo_str = str(produto.get('preco_custo', '0'))
     preco_formatado = float(preco_str.replace(',', '.'))
     preco_custo_formatado = float(preco_custo_str.replace(',', '.'))
-
-    # --- INÍCIO DA CORREÇÃO DE DATA ---
-    data_criacao_obj = None
-    if produto.get('data_criacao'):
-        # Converte a string 'DD/MM/AAAA HH:MM:SS' para um objeto datetime
-        data_criacao_obj = datetime.strptime(produto['data_criacao'], '%d/%m/%Y %H:%M:%S')
-
-    data_atualizacao_obj = None
-    if produto.get('data_atualizacao'):
-        # Converte a string 'DD/MM/AAAA HH:MM:SS' para um objeto datetime
-        data_atualizacao_obj = datetime.strptime(produto['data_atualizacao'], '%d/%m/%Y %H:%M:%S')
-    # --- FIM DA CORREÇÃO DE DATA ---
-
+    data_criacao_obj = datetime.strptime(produto['data_criacao'], '%d/%m/%Y %H:%M:%S') if produto.get('data_criacao') else None
+    data_atualizacao_obj = datetime.strptime(produto['data_atualizacao'], '%d/%m/%Y %H:%M:%S') if produto.get('data_atualizacao') else None
+    
+    # Adicionamos 'gtin' ao dicionário de dados
     dados_produto = {
         'id': int(produto['id']),
         'nome': produto['nome'],
         'sku': produto.get('codigo', None),
+        'gtin': produto.get('gtin', None), # Nova linha!
         'preco': preco_formatado,
         'preco_custo': preco_custo_formatado,
         'unidade': produto.get('unidade', None),
         'situacao': situacao_boolean,
-        'data_criacao': data_criacao_obj, # Agora enviamos o objeto Python
-        'data_atualizacao': data_atualizacao_obj # Agora enviamos o objeto Python
+        'data_criacao': data_criacao_obj,
+        'data_atualizacao': data_atualizacao_obj
     }
     
     cursor.execute(sql, dados_produto)
