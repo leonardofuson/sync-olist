@@ -27,7 +27,6 @@ def insert_product_in_db(cursor, produto):
     Insere ou atualiza um produto no banco de dados.
     Usa a cláusula ON CONFLICT para evitar duplicados e apenas atualizar.
     """
-    # SQL para inserir um novo produto ou atualizar um existente se o id_tiny já estiver lá
     sql = """
         INSERT INTO produtos (
             id_tiny, nome, sku, preco, preco_custo, unidade, ativo, 
@@ -46,18 +45,21 @@ def insert_product_in_db(cursor, produto):
             data_atualizacao_tiny = EXCLUDED.data_atualizacao_tiny,
             ultima_sincronizacao = CURRENT_TIMESTAMP;
     """
-    # A API do Tiny retorna 'A' para ativo. Convertemos para um booleano.
     situacao_boolean = True if produto.get('situacao') == 'A' else False
     
-    # O preço pode vir com vírgula, trocamos por ponto para o banco de dados.
-    preco_formatado = float(produto.get('preco', '0').replace(',', '.'))
-    preco_custo_formatado = float(produto.get('preco_custo', '0').replace(',', '.'))
+    # --- INÍCIO DA CORREÇÃO ---
+    # Garante que o valor seja uma string antes de usar .replace()
+    preco_str = str(produto.get('preco', '0'))
+    preco_custo_str = str(produto.get('preco_custo', '0'))
 
-    # Monta o dicionário de dados para o SQL
+    preco_formatado = float(preco_str.replace(',', '.'))
+    preco_custo_formatado = float(preco_custo_str.replace(',', '.'))
+    # --- FIM DA CORREÇÃO ---
+
     dados_produto = {
         'id': int(produto['id']),
         'nome': produto['nome'],
-        'sku': produto.get('codigo', None), # 'codigo' é o SKU na API do Tiny
+        'sku': produto.get('codigo', None),
         'preco': preco_formatado,
         'preco_custo': preco_custo_formatado,
         'unidade': produto.get('unidade', None),
@@ -65,6 +67,8 @@ def insert_product_in_db(cursor, produto):
         'data_criacao': produto.get('data_criacao', None),
         'data_atualizacao': produto.get('data_atualizacao', None)
     }
+    
+
     
     cursor.execute(sql, dados_produto)
 
