@@ -2,6 +2,7 @@ import os
 import requests
 import psycopg2
 from flask import Flask, jsonify
+from datetime import datetime
 
 # --- Configuração Inicial ---
 app = Flask(__name__)
@@ -47,14 +48,22 @@ def insert_product_in_db(cursor, produto):
     """
     situacao_boolean = True if produto.get('situacao') == 'A' else False
     
-    # --- INÍCIO DA CORREÇÃO ---
-    # Garante que o valor seja uma string antes de usar .replace()
     preco_str = str(produto.get('preco', '0'))
     preco_custo_str = str(produto.get('preco_custo', '0'))
-
     preco_formatado = float(preco_str.replace(',', '.'))
     preco_custo_formatado = float(preco_custo_str.replace(',', '.'))
-    # --- FIM DA CORREÇÃO ---
+
+    # --- INÍCIO DA CORREÇÃO DE DATA ---
+    data_criacao_obj = None
+    if produto.get('data_criacao'):
+        # Converte a string 'DD/MM/AAAA HH:MM:SS' para um objeto datetime
+        data_criacao_obj = datetime.strptime(produto['data_criacao'], '%d/%m/%Y %H:%M:%S')
+
+    data_atualizacao_obj = None
+    if produto.get('data_atualizacao'):
+        # Converte a string 'DD/MM/AAAA HH:MM:SS' para um objeto datetime
+        data_atualizacao_obj = datetime.strptime(produto['data_atualizacao'], '%d/%m/%Y %H:%M:%S')
+    # --- FIM DA CORREÇÃO DE DATA ---
 
     dados_produto = {
         'id': int(produto['id']),
@@ -64,11 +73,9 @@ def insert_product_in_db(cursor, produto):
         'preco_custo': preco_custo_formatado,
         'unidade': produto.get('unidade', None),
         'situacao': situacao_boolean,
-        'data_criacao': produto.get('data_criacao', None),
-        'data_atualizacao': produto.get('data_atualizacao', None)
+        'data_criacao': data_criacao_obj, # Agora enviamos o objeto Python
+        'data_atualizacao': data_atualizacao_obj # Agora enviamos o objeto Python
     }
-    
-
     
     cursor.execute(sql, dados_produto)
 
