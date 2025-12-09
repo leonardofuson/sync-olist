@@ -174,6 +174,7 @@ def sincronizar_produtos():
         "status": "sucesso",
         "total_produtos_sincronizados": total_produtos_sincronizados,
         "paginas_processadas": pagina_atual - 1
+
     })
 # Este bloco permite que o Render inicie a aplicação.
 if __name__ == "__main__":
