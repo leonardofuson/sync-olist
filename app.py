@@ -108,13 +108,11 @@ def sincronizar_produtos():
     pagina_atual = 1
     total_produtos_sincronizados = 0
     
-    # Conecta ao banco de dados uma única vez, fora do loop
     conn = get_db_connection()
     if not conn:
         return jsonify({"status": "erro", "mensagem": "Não foi possível conectar ao banco de dados."}), 500
 
     try:
-        # Loop infinito que será interrompido quando não houver mais produtos
         while True:
             print(f"Buscando produtos - Página: {pagina_atual}...")
             
@@ -131,43 +129,45 @@ def sincronizar_produtos():
             except requests.exceptions.RequestException as e:
                 raise Exception(f"Falha na comunicação com a API do Tiny na página {pagina_atual}: {e}")
 
+            # Verificação de erro da API
             if data['retorno']['status'] == 'ERRO':
-                # Se o erro for "Página não encontrada", significa que acabamos. É um sucesso.
-                if 'A pagina nao foi encontrada' in data['retorno']['erros'][0]['erro']:
+                erro_msg = data['retorno']['erros'][0]['erro']
+                if 'A pagina nao foi encontrada' in erro_msg:
                     print("API informou que não há mais páginas. Fim da sincronização.")
                     break
                 else:
-                    erro_tiny = data['retorno']['erros'][0]['erro']
-                    raise Exception(f"API do Tiny retornou um erro na página {pagina_atual}: {erro_tiny}")
+                    raise Exception(f"API do Tiny retornou um erro na página {pagina_atual}: {erro_msg}")
 
-            produtos_da_pagina = data['retorno']['produtos']
+            # --- INÍCIO DA CORREÇÃO ---
+            # Usar .get() para buscar a lista de produtos de forma segura.
+            # Se a chave 'produtos' não existir, retorna uma lista vazia [].
+            produtos_da_pagina = data['retorno'].get('produtos', [])
+            # --- FIM DA CORREÇÃO ---
             
-            # Se a página veio vazia, também significa que acabamos.
             if not produtos_da_pagina:
-                print("Página retornou vazia. Fim da sincronização.")
+                print("Página retornou sem produtos. Fim da sincronização.")
                 break
 
             num_produtos_pagina = len(produtos_da_pagina)
             total_produtos_sincronizados += num_produtos_pagina
             print(f"Encontrados {num_produtos_pagina} produtos na página {pagina_atual}. Sincronizando com o banco...")
 
-            # Salva os produtos da página atual no banco
             with conn.cursor() as cursor:
                 for item in produtos_da_pagina:
                     produto = item['produto']
                     insert_product_in_db(cursor, produto)
             
-            conn.commit() # Efetiva as alterações da página no banco
+            conn.commit()
 
-            pagina_atual += 1 # Prepara para buscar a próxima página
-            time.sleep(1) # Pausa de 1 segundo para não sobrecarregar a API
+            pagina_atual += 1
+            time.sleep(1)
 
     except Exception as e:
         conn.rollback()
         print(f"ERRO GERAL: {e}")
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
     finally:
-        conn.close() # Garante que a conexão seja sempre fechada
+        conn.close()
 
     print(f"-> Sucesso! {total_produtos_sincronizados} produtos no total foram sincronizados.")
     return jsonify({
@@ -175,7 +175,6 @@ def sincronizar_produtos():
         "total_produtos_sincronizados": total_produtos_sincronizados,
         "paginas_processadas": pagina_atual - 1
     })
-
 # Este bloco permite que o Render inicie a aplicação.
 if __name__ == "__main__":
     # Apenas para teste local, o Render usa o Gunicorn para iniciar.
