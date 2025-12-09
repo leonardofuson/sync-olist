@@ -1,6 +1,7 @@
 import os
 import requests
 import psycopg2
+import time
 from flask import Flask, jsonify
 from datetime import datetime
 
@@ -97,55 +98,83 @@ def hello_world():
 def sincronizar_produtos():
     """
     Endpoint principal que dispara a sincronização.
-    Busca produtos na API do Tiny e os salva no banco de dados.
+    Busca TODOS os produtos na API do Tiny, página por página, e os salva no banco.
     """
-    print("-> Iniciando processo de sincronização de produtos...")
+    print("-> Iniciando processo de sincronização COMPLETA de produtos...")
 
     if not TINY_API_TOKEN or not DATABASE_URL:
         return jsonify({"status": "erro", "mensagem": "Variáveis de ambiente não configuradas."}), 500
 
-    # 1. Buscar dados da API do Tiny
-    params = {
-        'token': TINY_API_TOKEN,
-        'formato': 'json',
-        'pagina': 1 # Por enquanto, buscamos apenas a primeira página
-    }
-    try:
-        response = requests.get(TINY_API_URL, params=params)
-        response.raise_for_status() # Lança um erro se a resposta for 4xx ou 5xx
-        data = response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Erro ao chamar a API do Tiny: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Falha na comunicação com a API do Tiny: {e}"}), 500
-
-    if data['retorno']['status'] == 'ERRO':
-        erro_tiny = data['retorno']['erros'][0]['erro']
-        print(f"Erro retornado pela API do Tiny: {erro_tiny}")
-        return jsonify({"status": "erro", "mensagem": f"API do Tiny retornou um erro: {erro_tiny}"}), 400
-
-    produtos = data['retorno']['produtos']
-    print(f"Encontrados {len(produtos)} produtos na página 1.")
-
-    # 2. Salvar dados no Banco de Dados
+    pagina_atual = 1
+    total_produtos_sincronizados = 0
+    
+    # Conecta ao banco de dados uma única vez, fora do loop
     conn = get_db_connection()
     if not conn:
         return jsonify({"status": "erro", "mensagem": "Não foi possível conectar ao banco de dados."}), 500
-    
-    try:
-        with conn.cursor() as cursor:
-            for item in produtos:
-                produto = item['produto']
-                insert_product_in_db(cursor, produto)
-            conn.commit() # Efetiva todas as inserções/atualizações no banco
-            print(f"-> Sucesso! {len(produtos)} produtos foram sincronizados com o banco de dados.")
-    except Exception as e:
-        conn.rollback() # Desfaz as alterações em caso de erro
-        print(f"Erro ao salvar no banco de dados: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Ocorreu um erro no banco de dados: {e}"}), 500
-    finally:
-        conn.close() # Sempre fecha a conexão
 
-    return jsonify({"status": "sucesso", "produtos_sincronizados": len(produtos)})
+    try:
+        # Loop infinito que será interrompido quando não houver mais produtos
+        while True:
+            print(f"Buscando produtos - Página: {pagina_atual}...")
+            
+            params = {
+                'token': TINY_API_TOKEN,
+                'formato': 'json',
+                'pagina': pagina_atual
+            }
+            
+            try:
+                response = requests.get(TINY_API_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+            except requests.exceptions.RequestException as e:
+                raise Exception(f"Falha na comunicação com a API do Tiny na página {pagina_atual}: {e}")
+
+            if data['retorno']['status'] == 'ERRO':
+                # Se o erro for "Página não encontrada", significa que acabamos. É um sucesso.
+                if 'A pagina nao foi encontrada' in data['retorno']['erros'][0]['erro']:
+                    print("API informou que não há mais páginas. Fim da sincronização.")
+                    break
+                else:
+                    erro_tiny = data['retorno']['erros'][0]['erro']
+                    raise Exception(f"API do Tiny retornou um erro na página {pagina_atual}: {erro_tiny}")
+
+            produtos_da_pagina = data['retorno']['produtos']
+            
+            # Se a página veio vazia, também significa que acabamos.
+            if not produtos_da_pagina:
+                print("Página retornou vazia. Fim da sincronização.")
+                break
+
+            num_produtos_pagina = len(produtos_da_pagina)
+            total_produtos_sincronizados += num_produtos_pagina
+            print(f"Encontrados {num_produtos_pagina} produtos na página {pagina_atual}. Sincronizando com o banco...")
+
+            # Salva os produtos da página atual no banco
+            with conn.cursor() as cursor:
+                for item in produtos_da_pagina:
+                    produto = item['produto']
+                    insert_product_in_db(cursor, produto)
+            
+            conn.commit() # Efetiva as alterações da página no banco
+
+            pagina_atual += 1 # Prepara para buscar a próxima página
+            time.sleep(1) # Pausa de 1 segundo para não sobrecarregar a API
+
+    except Exception as e:
+        conn.rollback()
+        print(f"ERRO GERAL: {e}")
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+    finally:
+        conn.close() # Garante que a conexão seja sempre fechada
+
+    print(f"-> Sucesso! {total_produtos_sincronizados} produtos no total foram sincronizados.")
+    return jsonify({
+        "status": "sucesso",
+        "total_produtos_sincronizados": total_produtos_sincronizados,
+        "paginas_processadas": pagina_atual - 1
+    })
 
 # Este bloco permite que o Render inicie a aplicação.
 if __name__ == "__main__":
